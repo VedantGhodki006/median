@@ -9,7 +9,7 @@ import { roles } from "../auth/permissions"
 import type { OrgRole, statements } from "../auth/permissions"
 import { getDb } from "../db"
 import { member } from "../db/schema"
-import { ServiceError } from "./errors"
+import { ServiceError } from "@workspace/contracts"
 
 /**
  * Who is calling a service, and for which organisation. Every service takes

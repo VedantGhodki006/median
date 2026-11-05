@@ -34,4 +34,10 @@ export type {
   PostingError,
   PostingResult,
 } from "./post-entry"
-export { buildReversal, checkPosting, isIsoDate, periodOf } from "./post-entry"
+export {
+  buildReversal,
+  checkPosting,
+  defaultReversalDate,
+  isIsoDate,
+  periodOf,
+} from "./post-entry"

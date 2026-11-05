@@ -1,4 +1,4 @@
-// Shared types and Zod schemas for the service layer.
+// Shared primitives for every contract.
 //
 // Conventions:
 // - Money is `Money` (integer paise, bigint). Format with `formatInr` from
@@ -11,6 +11,7 @@ import type { Money } from "@workspace/ledger"
 import { z } from "zod"
 
 import { ServiceError } from "./errors"
+import { parseRupees } from "@workspace/ledger"
 
 export type { Money }
 
@@ -22,6 +23,17 @@ export type IsoTimestamp = string
 export type Period = string
 
 export const isoDateSchema = z.iso.date()
+
+/** Today's calendar date in India (Asia/Kolkata), as YYYY-MM-DD. */
+export function todayInIndia(now: Date = new Date()): IsoDate {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now)
+}
 export const periodSchema = z
   .string()
   .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Period must be YYYY-MM")
@@ -52,28 +64,32 @@ export interface Page<T> {
 export const DEFAULT_PAGE_SIZE = 50
 export const MAX_PAGE_SIZE = 200
 
+/** Inclusive date range. */
+export const dateRangeSchema = z
+  .object({ from: z.iso.date(), to: z.iso.date() })
+  .refine((r) => r.from <= r.to, "'from' is after 'to'")
+
+/** A rupee amount as text ("1,18,000.50"); parse with parseRupees. */
+export const rupeeAmountTextSchema = z
+  .string()
+  .trim()
+  .refine((v) => {
+    try {
+      parseRupees(v)
+      return true
+    } catch {
+      return false
+    }
+  }, "Not a rupee amount")
+
 export const pageOptionsSchema = z.object({
   limit: z.int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
 })
 export type PageOptions = z.input<typeof pageOptionsSchema>
 
 /** Keyset cursor: the sort key and id of the last row on the page. */
-const cursorSchema = z.object({ k: z.string(), id: z.string() })
+export const cursorSchema = z.object({ k: z.string(), id: z.string() })
 export type Cursor = z.infer<typeof cursorSchema>
-
-export function encodeCursor(cursor: Cursor): string {
-  return Buffer.from(JSON.stringify(cursor)).toString("base64url")
-}
-
-export function decodeCursor(cursor: string | null | undefined): Cursor | null {
-  if (!cursor) return null
-  try {
-    const raw: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString())
-    return cursorSchema.parse(raw)
-  } catch {
-    throw new ServiceError("VALIDATION", "Invalid page cursor.")
-  }
-}
 
 /** Parses service input with Zod, turning failures into ServiceError. */
 export function parseInput<S extends z.ZodType>(

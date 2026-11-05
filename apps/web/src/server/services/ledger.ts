@@ -1,9 +1,15 @@
 import "server-only"
 
-import { buildReversal, checkPosting, paise, periodOf } from "@workspace/ledger"
+import {
+  buildReversal,
+  checkPosting,
+  defaultReversalDate,
+  paise,
+  periodOf,
+} from "@workspace/ledger"
 import type { EntryDraft, PostedEntry, PostingError } from "@workspace/ledger"
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
-import { z } from "zod"
+import type { z } from "zod"
 
 import { withTransaction } from "../db"
 import type { Tx } from "../db"
@@ -17,9 +23,20 @@ import {
 } from "../db/schema"
 import type { OrgContext } from "./context"
 import { assertCan } from "./context"
-import { ServiceError } from "./errors"
-import { idSchema, isoDateSchema, moneySchema, parseInput } from "./types"
-import type { IsoDate, Money } from "./types"
+import {
+  ServiceError,
+  manualEntryInputSchema,
+  parseInput,
+  postEntryInputSchema,
+  reverseEntryInputSchema,
+  todayInIndia,
+} from "@workspace/contracts"
+import type {
+  IsoDate,
+  ManualEntryInput,
+  PostEntryInput,
+  PostedEntryResult,
+} from "@workspace/contracts"
 
 /**
  * Who is posting. `userId` is null when a deterministic rule posts on its
@@ -30,44 +47,6 @@ export interface LedgerActor {
   readonly userId: string | null
   /** e.g. "web", "inbox", "invoice", "razorpay_rule", "bank_match" */
   readonly source: string
-}
-
-export const postEntryInputSchema = z.object({
-  entryDate: isoDateSchema,
-  narration: z.string().trim().min(1).max(500),
-  sourceType: z.enum([
-    "manual",
-    "razorpay",
-    "bank",
-    "invoice",
-    "bill",
-    "inbox",
-    "reversal",
-    "opening_balance",
-  ]),
-  sourceId: z.string().max(100).nullish(),
-  reversesEntryId: idSchema.nullish(),
-  lines: z
-    .array(
-      z.object({
-        accountId: idSchema,
-        partyId: idSchema.nullish(),
-        debit: moneySchema,
-        credit: moneySchema,
-        description: z.string().trim().max(500).nullish(),
-        dimensions: z.record(z.string(), z.string()).nullish(),
-      })
-    )
-    .min(1)
-    .max(500),
-})
-export type PostEntryInput = z.input<typeof postEntryInputSchema>
-
-export interface PostedEntryResult {
-  readonly id: string
-  readonly entryDate: IsoDate
-  readonly period: string
-  readonly total: Money
 }
 
 const POSTING_MESSAGES: Record<PostingError["code"], string> = {
@@ -390,13 +369,6 @@ async function postInTransaction(
   }
 }
 
-const manualEntryInputSchema = postEntryInputSchema.omit({
-  sourceType: true,
-  sourceId: true,
-  reversesEntryId: true,
-})
-export type ManualEntryInput = z.input<typeof manualEntryInputSchema>
-
 /** A journal entry typed in by a user (finance team or CA). */
 export async function postManualEntry(
   ctx: OrgContext,
@@ -410,20 +382,17 @@ export async function postManualEntry(
   )
 }
 
-const reverseEntryInputSchema = z.object({
-  entryId: idSchema,
-  date: isoDateSchema,
-  narration: z.string().trim().min(1).max(500).optional(),
-})
-
 /**
- * Reverses a posted entry with a mirror entry dated `date` (which must be in
- * an open period). The only way to correct the books.
+ * Reverses a posted entry with a mirror entry. The only way to correct the
+ * books. `date` defaults to today (India time): the current open period, even
+ * when the original is in a locked period. The reversal links to the
+ * original via reverses_entry_id and writes a "journal_entry.reverse" audit
+ * row. Throws PERIOD_LOCKED if the reversal date's period is locked.
  */
 export async function reverseEntry(
   ctx: OrgContext,
   entryId: string,
-  options: { readonly date: IsoDate; readonly narration?: string }
+  options: { readonly date?: IsoDate; readonly narration?: string } = {}
 ): Promise<PostedEntryResult> {
   assertCan(ctx, "ledger", "reverse")
   const r = parseInput(reverseEntryInputSchema, { entryId, ...options })
@@ -437,7 +406,7 @@ export async function reverseEntry(
       const original = await loadOriginal(tx, ctx.orgId, r.entryId)
       if (!original) throw new ServiceError("NOT_FOUND", "Entry not found.")
       const reversal = buildReversal(original.entry, {
-        date: r.date,
+        date: r.date ?? defaultReversalDate(original.entry, todayInIndia()),
         narration:
           r.narration ?? `Reversal of entry dated ${original.entry.date}`,
       })

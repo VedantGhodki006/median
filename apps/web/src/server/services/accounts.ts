@@ -1,25 +1,20 @@
 import "server-only"
 
-import { z } from "zod"
-
 import type { OrgContext } from "./context"
 import { assertCan } from "./context"
 import { STUB_ACCOUNT_LIST } from "./stub-data"
-import { pageOptionsSchema, parseInput } from "./types"
+import {
+  listAccountsFiltersSchema,
+  pageOptionsSchema,
+  parseInput,
+} from "@workspace/contracts"
 import type {
   AccountType,
   LedgerAccountSummary,
+  ListAccountsFilters,
   Page,
   PageOptions,
-} from "./types"
-
-const listAccountsFiltersSchema = z.object({
-  type: z
-    .enum(["asset", "liability", "equity", "income", "expense"])
-    .optional(),
-  search: z.string().trim().max(100).optional(),
-})
-export type ListAccountsFilters = z.input<typeof listAccountsFiltersSchema>
+} from "@workspace/contracts"
 
 /**
  * Chart of accounts for pickers (inbox edits, manual entries), ordered by

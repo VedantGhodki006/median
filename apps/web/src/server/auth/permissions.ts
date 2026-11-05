@@ -15,6 +15,7 @@ export const statements = {
   ledger: ["read", "propose", "post", "reverse"],
   period: ["read", "lock", "unlock"],
   report: ["read", "export"],
+  settings: ["read", "update"],
 } as const
 
 export const ac = createAccessControl(statements)
@@ -25,6 +26,7 @@ export const owner = ac.newRole({
   ledger: ["read", "propose", "post", "reverse"],
   period: ["read", "lock", "unlock"],
   report: ["read", "export"],
+  settings: ["read", "update"],
 })
 
 /** In-house finance team: runs the books day to day. */
@@ -32,6 +34,7 @@ export const finance = ac.newRole({
   ledger: ["read", "propose", "post", "reverse"],
   period: ["read", "lock"],
   report: ["read", "export"],
+  settings: ["read", "update"],
 })
 
 /** External chartered accountant: works on the books, can't manage people. */
@@ -39,6 +42,7 @@ export const ca = ac.newRole({
   ledger: ["read", "propose", "post", "reverse"],
   period: ["read"],
   report: ["read", "export"],
+  settings: ["read"],
 })
 
 /** Investor: read-only. */
@@ -46,6 +50,7 @@ export const investor = ac.newRole({
   ledger: ["read"],
   period: ["read"],
   report: ["read"],
+  settings: ["read"],
 })
 
 export const roles = { owner, finance, ca, investor } as const

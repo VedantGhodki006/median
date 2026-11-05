@@ -5,28 +5,7 @@ import { paise } from "@workspace/ledger"
 import type { OrgContext } from "./context"
 import { assertCan } from "./context"
 import { currentPeriod } from "./stub-data"
-import type { IsoTimestamp, Money, Period } from "./types"
-
-export interface DashboardSummary {
-  readonly asOf: IsoTimestamp
-  /** Bank + Razorpay clearing balances. */
-  readonly cash: Money
-  readonly revenueThisMonth: Money
-  readonly revenueLastMonth: Money
-  readonly receivables: {
-    /** Unpaid invoice balances. */
-    readonly outstanding: Money
-    /** Part of `outstanding` past its due date. */
-    readonly overdue: Money
-    readonly invoiceCount: number
-  }
-  readonly gstPayable: {
-    readonly period: Period
-    /** Output tax minus input tax credit. Negative means ITC carried forward. */
-    readonly amount: Money
-  }
-  readonly inboxPendingCount: number
-}
+import type { DashboardSummary } from "@workspace/contracts"
 
 /** Headline numbers for the home screen. STUB. */
 export async function getDashboardSummary(

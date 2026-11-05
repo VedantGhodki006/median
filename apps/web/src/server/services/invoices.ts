@@ -1,118 +1,32 @@
 import "server-only"
 
 import { paise } from "@workspace/ledger"
-import { z } from "zod"
 
 import type { OrgContext } from "./context"
 import { assertCan } from "./context"
-import { ServiceError } from "./errors"
 import { STUB_PARTIES, daysAgo, timestampDaysAgo } from "./stub-data"
 import {
-  gstStateCodeSchema,
+  ServiceError,
+  createInvoiceInputSchema,
   idSchema,
-  isoDateSchema,
-  moneySchema,
+  listInvoicesFiltersSchema,
   pageOptionsSchema,
   parseInput,
-} from "./types"
+} from "@workspace/contracts"
 import type {
+  CreateInvoiceInput,
+  Invoice,
+  InvoiceLine,
+  InvoiceListItem,
+  InvoiceStatus,
   IsoDate,
-  IsoTimestamp,
+  ListInvoicesFilters,
   Money,
   Page,
   PageOptions,
   PartyRef,
-} from "./types"
-
-export type InvoiceStatus = "issued" | "partially_paid" | "paid" | "cancelled"
-
-/** GST rates in basis points (18% = 1800). */
-export const GST_RATES_BPS = [0, 25, 300, 500, 1200, 1800, 2800, 4000] as const
-
-export interface InvoiceLine {
-  readonly id: string
-  readonly description: string
-  readonly hsnSac: string
-  /** Decimal string, up to 3 places: "1", "7.5". */
-  readonly quantity: string
-  readonly unitPrice: Money
-  readonly gstRateBps: number
-  readonly taxable: Money
-  readonly cgst: Money
-  readonly sgst: Money
-  readonly igst: Money
-  readonly total: Money
-}
-
-export interface Invoice {
-  readonly id: string
-  /** e.g. "INV/2026-27/0042" */
-  readonly number: string
-  /** e.g. "2026-27" */
-  readonly financialYear: string
-  readonly party: PartyRef
-  readonly invoiceDate: IsoDate
-  readonly dueDate: IsoDate
-  readonly placeOfSupply: string
-  /** intra = CGST + SGST, inter = IGST. */
-  readonly supplyType: "intra" | "inter"
-  readonly lines: readonly InvoiceLine[]
-  readonly taxable: Money
-  readonly cgst: Money
-  readonly sgst: Money
-  readonly igst: Money
-  readonly total: Money
-  readonly paid: Money
-  readonly status: InvoiceStatus
-  readonly notes: string | null
-  readonly journalEntryId: string | null
-  readonly createdAt: IsoTimestamp
-}
-
-export type InvoiceListItem = Omit<Invoice, "lines">
-
-export const createInvoiceInputSchema = z
-  .object({
-    partyId: idSchema,
-    invoiceDate: isoDateSchema,
-    dueDate: isoDateSchema,
-    placeOfSupply: gstStateCodeSchema,
-    notes: z.string().trim().max(2000).nullish(),
-    lines: z
-      .array(
-        z.object({
-          description: z.string().trim().min(1).max(500),
-          hsnSac: z
-            .string()
-            .trim()
-            .regex(/^\d{4,8}$/, "HSN/SAC is 4–8 digits"),
-          quantity: z
-            .string()
-            .trim()
-            .regex(/^\d+(\.\d{1,3})?$/, "Quantity like 1 or 7.5"),
-          unitPrice: moneySchema.refine(
-            (v) => v >= 0n,
-            "Price can't be negative"
-          ),
-          gstRateBps: z.union(GST_RATES_BPS.map((r) => z.literal(r))),
-        })
-      )
-      .min(1)
-      .max(100),
-  })
-  .refine(
-    (i) => i.dueDate >= i.invoiceDate,
-    "Due date is before the invoice date"
-  )
-export type CreateInvoiceInput = z.input<typeof createInvoiceInputSchema>
-
-const listInvoicesFiltersSchema = z.object({
-  status: z.enum(["issued", "partially_paid", "paid", "cancelled"]).optional(),
-  partyId: idSchema.optional(),
-  from: isoDateSchema.optional(),
-  to: isoDateSchema.optional(),
-})
-export type ListInvoicesFilters = z.input<typeof listInvoicesFiltersSchema>
+  SupplyType,
+} from "@workspace/contracts"
 
 // --- stub helpers (Day 4 moves the real GST maths into @workspace/ledger) ---
 
@@ -130,8 +44,9 @@ function stubLine(
   const milli = BigInt(whole) * 1000n + BigInt(frac.padEnd(3, "0"))
   const taxable = (milli * unitPrice + 500n) / 1000n
   const tax = (taxable * BigInt(gstRateBps) + 5_000n) / 10_000n
-  const cgst = intra ? tax / 2n : 0n
-  const sgst = intra ? tax - cgst : 0n
+  // Rule 6: halves, with the odd paisa on CGST.
+  const sgst = intra ? tax / 2n : 0n
+  const cgst = intra ? tax - sgst : 0n
   const igst = intra ? 0n : tax
   return {
     id: crypto.randomUUID(),
@@ -161,7 +76,9 @@ function stubInvoice(
 ): Invoice {
   const sum = (pick: (l: InvoiceLine) => Money) =>
     paise(lines.reduce((s, l) => s + pick(l), 0n))
-  const total = sum((l) => l.total)
+  const exact = sum((l) => l.total)
+  // Stub rounding to the rupee; Day 4 moves this into @workspace/ledger.
+  const total = paise(((exact + 50n) / 100n) * 100n)
   return {
     id,
     number,
@@ -170,12 +87,14 @@ function stubInvoice(
     invoiceDate,
     dueDate,
     placeOfSupply,
-    supplyType: placeOfSupply === STUB_ORG_STATE ? "intra" : "inter",
+    supplyType: placeOfSupply === STUB_ORG_STATE ? "intrastate" : "interstate",
+    reverseCharge: false,
     lines,
     taxable: sum((l) => l.taxable),
     cgst: sum((l) => l.cgst),
     sgst: sum((l) => l.sgst),
     igst: sum((l) => l.igst),
+    roundOff: paise(total - exact),
     total,
     paid: status === "paid" ? total : paise(0n),
     status,
@@ -259,15 +178,20 @@ export async function createInvoice(
 ): Promise<Invoice> {
   assertCan(ctx, "ledger", "post")
   const i = parseInput(createInvoiceInputSchema, input)
-  const intra = i.placeOfSupply === STUB_ORG_STATE
+  // Rule 6: unknown B2C place of supply → the organisation's state.
+  const placeOfSupply = i.placeOfSupply ?? STUB_ORG_STATE
+  const supplyType: SupplyType =
+    i.supplyType ??
+    (placeOfSupply === STUB_ORG_STATE ? "intrastate" : "interstate")
+  const chargesNoGst = supplyType === "export_lut" || i.reverseCharge
   const lines = i.lines.map((l) =>
     stubLine(
       l.description,
       l.hsnSac,
       l.quantity,
       l.unitPrice,
-      l.gstRateBps,
-      intra
+      chargesNoGst ? 0 : l.gstRateBps,
+      supplyType === "intrastate"
     )
   )
   await Promise.resolve()
@@ -276,13 +200,15 @@ export async function createInvoice(
       crypto.randomUUID(),
       "INV/2026-27/0043",
       STUB_PARTIES.acme,
-      i.placeOfSupply,
+      placeOfSupply,
       i.invoiceDate,
       i.dueDate,
       lines,
       "issued",
       i.notes ?? null
     ),
+    supplyType,
+    reverseCharge: i.reverseCharge,
     createdAt: new Date().toISOString(),
   }
 }
