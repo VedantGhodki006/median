@@ -54,3 +54,25 @@ describe("accountTypeForCode", () => {
     expect(accountTypeForCode("abcd")).toBeNull()
   })
 })
+
+describe("accounts the accounting rules depend on", () => {
+  const required = {
+    gst_output_cgst: "Output CGST",
+    gst_output_sgst: "Output SGST",
+    gst_output_igst: "Output IGST",
+    gst_input_cgst: "Input CGST",
+    gst_input_sgst: "Input SGST",
+    gst_input_igst: "Input IGST",
+    tds_receivable: "TDS receivable",
+    gateway_charges: "Payment gateway charges",
+    razorpay_clearing: "Razorpay clearing",
+    round_off: "Round off",
+  } as const
+
+  it.each(INDUSTRIES)("are seeded for %s", (industry) => {
+    const accounts = chartOfAccountsFor(industry)
+    for (const [key, name] of Object.entries(required)) {
+      expect(accounts.find((a) => a.systemKey === key)?.name, key).toBe(name)
+    }
+  })
+})

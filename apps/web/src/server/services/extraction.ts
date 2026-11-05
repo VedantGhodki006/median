@@ -1,71 +1,23 @@
 import "server-only"
 
 import { paise, parseRupees } from "@workspace/ledger"
-import { z } from "zod"
 
 import type { OrgContext } from "./context"
+import { requireConsent } from "./consent"
 import { assertCan } from "./context"
-import type { InboxItem } from "./inbox"
 import { STUB_ACCOUNTS, STUB_PARTIES } from "./stub-data"
-import { idSchema, parseInput } from "./types"
-
-const amountText = z
-  .string()
-  .describe(
-    'Amount exactly as printed, in rupees, e.g. "1,18,000.00". No maths.'
-  )
-
-/**
- * What the AI extracts from a vendor bill: text as printed on the document,
- * no calculations. Use this as the AI output schema. Median parses amounts and
- * computes tax and totals itself, and cross-checks them against
- * `printedTotals`.
- */
-export const billExtractionSchema = z.object({
-  vendor: z.object({
-    name: z.string().min(1),
-    gstin: z.string().nullable().describe("15-character GSTIN, or null"),
-    stateCode: z
-      .string()
-      .nullable()
-      .describe('Two-digit GST state code, e.g. "29"'),
-  }),
-  billNumber: z.string().min(1),
-  billDate: z.string().describe("YYYY-MM-DD"),
-  dueDate: z.string().nullable().describe("YYYY-MM-DD, or null"),
-  placeOfSupplyStateCode: z.string().nullable(),
-  currency: z.string().describe('ISO currency code as printed, usually "INR"'),
-  lines: z
-    .array(
-      z.object({
-        description: z.string(),
-        hsnSac: z.string().nullable(),
-        quantity: z
-          .string()
-          .nullable()
-          .describe('As printed, e.g. "2" or "1.5"'),
-        taxableAmount: amountText,
-        gstRatePercent: z
-          .string()
-          .nullable()
-          .describe('GST rate as printed, e.g. "18" for 18%'),
-      })
-    )
-    .min(1),
-  printedTotals: z.object({
-    taxable: amountText.nullable(),
-    cgst: amountText.nullable(),
-    sgst: amountText.nullable(),
-    igst: amountText.nullable(),
-    total: amountText.nullable(),
-  }),
-})
-export type BillExtraction = z.infer<typeof billExtractionSchema>
+import {
+  billExtractionSchema,
+  idSchema,
+  parseInput,
+} from "@workspace/contracts"
+import type { InboxItem } from "@workspace/contracts"
 
 /**
  * Turns a validated bill extraction into a pending purchase entry with input
  * tax credit. Tax and totals are computed in code; the AI's output is only
- * read. Throws VALIDATION if the extraction doesn't match the schema. STUB:
+ * read. Throws CONSENT_REQUIRED, or VALIDATION if the extraction doesn't
+ * match the schema. STUB:
  * returns a fixed proposal; Day 4 computes it from the extraction.
  */
 export async function createInboxItemFromExtraction(
@@ -76,6 +28,7 @@ export async function createInboxItemFromExtraction(
   assertCan(ctx, "ledger", "propose")
   const docId = parseInput(idSchema, documentId)
   const bill = parseInput(billExtractionSchema, extraction)
+  await requireConsent(ctx)
   const taxable = bill.lines.reduce(
     (sum, l) => sum + parseRupees(l.taxableAmount),
     0n

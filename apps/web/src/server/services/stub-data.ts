@@ -3,14 +3,13 @@
 // delete this file once nothing imports it.
 
 import { paise } from "@workspace/ledger"
-
 import type {
   IsoDate,
   IsoTimestamp,
   JournalEntryView,
   LedgerAccountSummary,
   PartyRef,
-} from "./types"
+} from "@workspace/contracts"
 
 /** Today minus `n` days, as YYYY-MM-DD. */
 export function daysAgo(n: number): IsoDate {

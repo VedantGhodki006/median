@@ -171,3 +171,16 @@ export function buildReversal(
     reversesEntryId: original.id,
   }
 }
+
+/**
+ * The date a reversal is posted on when the user doesn't pick one: today,
+ * i.e. the current open period, even when the original sits in a locked
+ * period (that is the point of a reversal). Never before the original.
+ * checkPosting still rejects it if today's period is itself locked.
+ */
+export function defaultReversalDate(
+  original: Pick<PostedEntry, "date">,
+  today: string
+): string {
+  return today > original.date ? today : original.date
+}

@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 
 import { paise } from "./money"
 import type { Money } from "./money"
-import { buildReversal, checkPosting, isIsoDate } from "./post-entry"
+import {
+  buildReversal,
+  checkPosting,
+  defaultReversalDate,
+  isIsoDate,
+} from "./post-entry"
 import type { EntryDraft, PostedEntry, PostingContext } from "./post-entry"
 import type { JournalLine } from "./types"
 
@@ -258,5 +263,53 @@ describe("checkPosting: corrections only by reversal", () => {
         )
       )
     ).toEqual(["REVERSAL_ORIGINAL_MISSING"])
+  })
+})
+
+describe("reversing an entry that sits in a locked period", () => {
+  const octoberLocked: PostingContext = {
+    lockedPeriods: new Set(["2026-10"]),
+    original: { entry: posted, alreadyReversed: false },
+  }
+
+  it("posts the reversal in the current open period, linked to the original", () => {
+    const date = defaultReversalDate(posted, "2026-11-05")
+    expect(date).toBe("2026-11-05")
+    const reversal = buildReversal(posted, { date })
+    expect(reversal.reversesEntryId).toBe(posted.id)
+    expect(checkPosting(reversal, octoberLocked)).toEqual({
+      ok: true,
+      period: "2026-11",
+      totalDebit: 118_000_00n,
+      totalCredit: 118_000_00n,
+    })
+  })
+
+  it("is rejected if the current period is locked too", () => {
+    const bothLocked: PostingContext = {
+      ...octoberLocked,
+      lockedPeriods: new Set(["2026-10", "2026-11"]),
+    }
+    const reversal = buildReversal(posted, {
+      date: defaultReversalDate(posted, "2026-11-05"),
+    })
+    expect(codes(checkPosting(reversal, bothLocked))).toEqual(["PERIOD_LOCKED"])
+  })
+
+  it("never dates the reversal before the original", () => {
+    expect(defaultReversalDate(posted, "2026-10-01")).toBe(posted.date)
+  })
+})
+
+describe("posting directly into a locked period", () => {
+  it("is rejected for new entries, whatever their source", () => {
+    const result = checkPosting(
+      { ...invoice, date: "2026-10-31" },
+      { lockedPeriods: new Set(["2026-10"]) }
+    )
+    expect(result).toEqual({
+      ok: false,
+      errors: [{ code: "PERIOD_LOCKED", period: "2026-10" }],
+    })
   })
 })

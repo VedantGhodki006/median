@@ -2,14 +2,8 @@ import "server-only"
 
 import type { OrgContext } from "./context"
 import { assertCan } from "./context"
-import { parseInput, periodSchema } from "./types"
-import type { IsoTimestamp, Period } from "./types"
-
-export interface PeriodLock {
-  readonly period: Period
-  readonly lockedBy: string
-  readonly lockedAt: IsoTimestamp
-}
+import { parseInput, periodSchema } from "@workspace/contracts"
+import type { Period, PeriodLock } from "@workspace/contracts"
 
 /**
  * Locks a month: nothing can be posted into it afterwards (corrections go in
