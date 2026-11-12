@@ -13,6 +13,8 @@ export const ASK_TOOL_LABELS = {
   getCashPosition: "Read the cash position",
   listInboxItems: "Read the AI inbox",
   listParties: "Read customers and vendors",
+  getFinancialMetrics: "Work out a financial metric",
+  calculate: "Do the maths in code",
 } as const
 
 export type AskToolName = keyof typeof ASK_TOOL_LABELS

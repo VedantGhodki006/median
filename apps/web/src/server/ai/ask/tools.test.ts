@@ -39,13 +39,15 @@ beforeEach(() => {
 })
 
 describe("Ask Median tools", () => {
-  it("are exactly the read-only services from the spec, each labelled", () => {
-    expect(Object.keys(tools).sort()).toEqual(Object.keys(services).sort())
+  it("are exactly the read-only services from the spec plus the maths tools, each labelled", () => {
+    expect(Object.keys(tools).sort()).toEqual(
+      [...Object.keys(services), "getFinancialMetrics", "calculate"].sort()
+    )
     expect(Object.keys(ASK_TOOL_LABELS).sort()).toEqual(
       Object.keys(tools).sort()
     )
     for (const name of Object.keys(tools)) {
-      expect(name).toMatch(/^(get|list)[A-Z]/)
+      expect(name).toMatch(/^((get|list)[A-Z]|calculate$)/)
     }
   })
 
@@ -147,5 +149,86 @@ describe("Ask Median tools", () => {
     expect(result).toMatchObject({
       sources: [{ href: "/ledger?from=2026-10-01&to=2026-10-31&q=AWS" }],
     })
+  })
+
+  it("computes runway in code from monthly P&Ls and cash, citing each", async () => {
+    const month = (from: string, to: string) => ({
+      from,
+      to,
+      totalIncome: paise(5_00_000_00n),
+      totalExpenses: paise(4_06_195_09n),
+      netProfit: paise(93_804_91n),
+      expenses: [],
+    })
+    services.getProfitAndLoss.mockImplementation(
+      (_ctx: unknown, from: string, to: string) =>
+        Promise.resolve(month(from, to))
+    )
+    services.getCashPosition.mockResolvedValue({
+      asOf: "2026-11-12",
+      total: paise(43_73_507_24n),
+    })
+    const dated = createAskTools(ctx, "2026-11-12")
+    const result = await dated.getFinancialMetrics.execute?.(
+      { metric: "runway_months" },
+      options
+    )
+    expect(services.getProfitAndLoss).toHaveBeenCalledTimes(3)
+    expect(services.getProfitAndLoss).toHaveBeenCalledWith(
+      ctx,
+      "2026-08-01",
+      "2026-08-31",
+      { comparative: false }
+    )
+    expect(services.getCashPosition).toHaveBeenCalledWith(ctx, "2026-11-12")
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        value: "10.8 months",
+        status: "cash_flow_positive",
+        formula:
+          "₹43,73,507.24 cash ÷ ₹4,06,195.09 avg monthly expenses = 10.8 months",
+      },
+      sources: [
+        { href: "/cash" },
+        { href: "/reports?from=2026-08-01&to=2026-08-31" },
+        { href: "/reports?from=2026-09-01&to=2026-09-30" },
+        { href: "/reports?from=2026-10-01&to=2026-10-31" },
+      ],
+    })
+  })
+
+  it("calculates over paise operands and cites them, or reports bad input", async () => {
+    const ok = await tools.calculate.execute?.(
+      {
+        expression: "cash / expenses",
+        unit: "months",
+        operands: [
+          { label: "cash", valuePaise: "437350724", sourceLink: "/cash" },
+          { label: "expenses", valuePaise: "40619509" },
+        ],
+      },
+      options
+    )
+    expect(ok).toEqual({
+      ok: true,
+      data: {
+        result: "10.8 months",
+        formula: "₹43,73,507.24 cash ÷ ₹4,06,195.09 expenses = 10.8 months",
+      },
+      sources: [{ title: "cash", href: "/cash" }],
+    })
+    const zero = await tools.calculate.execute?.(
+      {
+        expression: "a / b",
+        unit: "number",
+        operands: [
+          { label: "a", value: 1 },
+          { label: "b", value: 0 },
+        ],
+      },
+      options
+    )
+    expect(zero).toMatchObject({ ok: false, error: "DIVISION_BY_ZERO" })
   })
 })

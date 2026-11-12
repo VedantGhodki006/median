@@ -65,7 +65,7 @@ export interface AskInput {
  * quote comes from a service.
  */
 export async function ask(ctx: OrgContext, input: AskInput) {
-  const tools = createAskTools(ctx)
+  const tools = createAskTools(ctx, input.today)
   // Server console only: no question text or figures, just shape and timing.
   const started = Date.now()
   let stepStarted = started

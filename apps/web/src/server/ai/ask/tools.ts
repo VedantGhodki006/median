@@ -10,6 +10,8 @@ import {
   listPartiesFiltersSchema,
   periodSchema,
 } from "@workspace/contracts"
+import type { IsoDate } from "@workspace/contracts"
+import { paise } from "@workspace/ledger"
 import { tool } from "ai"
 import { z } from "zod"
 
@@ -31,6 +33,16 @@ import {
 import type { OrgContext } from "@/server/services"
 
 import type { AskToolName } from "@/lib/ask-tools"
+import { todayIso } from "@/lib/format-date"
+
+import { calculate } from "./calculate"
+import type { FinancialMetric } from "./metrics"
+import {
+  FINANCIAL_METRICS,
+  computeMetric,
+  lastThreeMonths,
+  wholeMonths,
+} from "./metrics"
 
 import { sources } from "./sources"
 import type { AskSource } from "./sources"
@@ -77,11 +89,46 @@ async function run<T>(
 }
 
 /**
+ * Loads whole-month P&Ls (and, for runway, cash at the end of the range) and
+ * computes one metric in code. from/to default to the last three whole months,
+ * with cash as of today.
+ */
+export async function loadFinancialMetric(
+  ctx: OrgContext,
+  input: {
+    readonly metric: FinancialMetric
+    readonly from?: IsoDate | undefined
+    readonly to?: IsoDate | undefined
+  },
+  today: IsoDate
+) {
+  const range = { ...lastThreeMonths(today) }
+  if (input.from) range.from = input.from
+  if (input.to) range.to = input.to
+  const months = wholeMonths(range.from, range.to)
+  // "How much runway do we have" means cash today; a named range, cash at its end.
+  const cashAsOf = input.to ? (months.at(-1)?.to ?? range.to) : today
+  const [pls, cash] = await Promise.all([
+    Promise.all(
+      months.map((m) =>
+        getProfitAndLoss(ctx, m.from, m.to, { comparative: false })
+      )
+    ),
+    input.metric === "runway_months" ? getCashPosition(ctx, cashAsOf) : null,
+  ])
+  return computeMetric(
+    input.metric,
+    pls.map((pl) => ({ pl, source: sources.profitAndLoss(pl.from, pl.to) })),
+    cash ? { asOf: cash.asOf, total: cash.total, source: sources.cash() } : null
+  )
+}
+
+/**
  * The read-only tools Ask Median may call, bound to the signed-in user's
  * context. Each wraps one existing service, which checks the organisation and
  * the role itself. None of them posts, approves or changes anything.
  */
-export function createAskTools(ctx: OrgContext) {
+export function createAskTools(ctx: OrgContext, today: IsoDate = todayIso()) {
   return {
     getDashboardSummary: tool({
       description:
@@ -255,6 +302,82 @@ export function createAskTools(ctx: OrgContext) {
             ...page.items.map((p) => sources.party(p.id, p.name)),
           ]
         ),
+    }),
+
+    getFinancialMetrics: tool({
+      description:
+        "A financial metric computed in code from the P&L and cash position, with its formula and inputs: runway_months, burn_rate (net and gross, monthly), gross_margin_pct, net_margin_pct, revenue_growth_mom_pct, expense_growth_mom_pct, avg_monthly_revenue, avg_monthly_expenses. Uses whole months; from/to default to the last three whole months.",
+      inputSchema: z.object({
+        metric: z.enum(FINANCIAL_METRICS),
+        from: isoDateSchema.optional(),
+        to: isoDateSchema.optional(),
+      }),
+      execute: (input) =>
+        run(
+          () => loadFinancialMetric(ctx, input, today),
+          (result) => [
+            ...new Map(
+              result.inputs.map((i) => [i.source.href, i.source])
+            ).values(),
+          ]
+        ),
+    }),
+
+    calculate: tool({
+      description:
+        'Exact arithmetic (+ − × ÷ and parentheses) over figures you fetched with other tools, for anything getFinancialMetrics doesn\'t cover. Name each figure as an operand (label: letters, digits, underscores) and write the expression with those labels only, e.g. "(revenue - cost) / revenue" with unit "percent". Money goes in as valuePaise (integer paise: ₹1,234.50 is 123450); counts and rates as value. Money counts in rupees inside the expression.',
+      inputSchema: z.object({
+        expression: z.string().min(1).max(500),
+        operands: z
+          .array(
+            z.object({
+              label: z.string().min(1).max(60),
+              valuePaise: z
+                .string()
+                .regex(/^-?\d{1,18}$/)
+                .optional()
+                .describe("Money in integer paise, as a string of digits."),
+              value: z.number().finite().optional(),
+              sourceLink: z
+                .string()
+                .regex(/^\/[^\s]*$/)
+                .optional()
+                .describe(
+                  "The href from the tool result the figure came from."
+                ),
+            })
+          )
+          .min(1)
+          .max(20),
+        unit: z
+          .enum(["inr", "number", "percent", "months"])
+          .describe(
+            "How to show the result: inr (money), percent (expression gives a fraction), months, or number."
+          ),
+      }),
+      execute: ({ expression, operands, unit }): AskToolResult => {
+        const result = calculate({
+          expression,
+          unit,
+          operands: operands.map((o) => ({
+            label: o.label,
+            valuePaise:
+              o.valuePaise === undefined
+                ? undefined
+                : paise(BigInt(o.valuePaise)),
+            value: o.value,
+            sourceLink: o.sourceLink,
+          })),
+        })
+        if (!result.ok) return result
+        return {
+          ok: true,
+          data: { result: result.result, formula: result.formula },
+          sources: operands.flatMap((o) =>
+            o.sourceLink ? [{ title: o.label, href: o.sourceLink }] : []
+          ),
+        }
+      },
     }),
   }
 }

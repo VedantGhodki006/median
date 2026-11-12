@@ -5,10 +5,13 @@ import { askInstructions } from "./instructions"
 describe("askInstructions", () => {
   const base = { today: "2026-11-12", role: "finance" } as const
 
-  it("forbids maths, demands exact quotes and citations, allows I don't know", () => {
+  it("forbids mental maths, sends maths to tools, demands exact quotes and citations, allows I don't know", () => {
     const text = askInstructions(base)
     expect(text).toContain("Answer only from tool results")
-    expect(text).toContain("Never calculate")
+    expect(text).toContain("Never calculate in your head")
+    expect(text).toContain("never say you can't calculate")
+    expect(text).toContain("getFinancialMetrics")
+    expect(text).toContain("cash-flow positive")
     expect(text).toContain("exactly as a tool returned it")
     expect(text).toContain("Cite every figure")
     expect(text).toContain('"I don\'t know"')

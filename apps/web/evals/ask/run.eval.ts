@@ -116,6 +116,10 @@ async function truthText(org: EvalOrg, call: TruthCall): Promise<string> {
         return s.getInvoice(ctx, org.invoices[call.invoice].id)
       case "listParties":
         return s.listParties(ctx, null, { includeArchived: true })
+      case "getFinancialMetrics": {
+        const { loadFinancialMetric } = await import("@/server/ai/ask/tools")
+        return loadFinancialMetric(ctx, call, todayIso())
+      }
     }
   })()
   return JSON.stringify(toModelJson(result))

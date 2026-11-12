@@ -55,6 +55,12 @@ export type TruthCall =
       readonly invoice: "acme" | "zenith" | "orbit"
     }
   | { readonly service: "listParties" }
+  | {
+      readonly service: "getFinancialMetrics"
+      readonly metric: "runway_months" | "gross_margin_pct"
+      readonly from: string
+      readonly to: string
+    }
 
 const OCT = { from: "2026-10-01", to: "2026-10-31" } as const
 const pnl: TruthCall = { service: "getProfitAndLoss", ...OCT }
@@ -353,6 +359,31 @@ export const CASES: readonly AskCase[] = [
     expect: fixed(["₹7,48,000.00"]),
     cite: paths("/cash", BS),
     truth: [cash],
+  },
+  // Maths done in code (getFinancialMetrics), quoted with its formula
+  {
+    id: "metric-runway",
+    kind: "figure",
+    topic: "Metrics",
+    question: "Based on October 2026, how much runway do we have in months?",
+    // Burning: ₹7,48,000.00 cash ÷ ₹52,000.00 net burn = 14.38… months.
+    expect: fixed(["14.4 months"], ["₹7,48,000.00"], ["₹52,000.00"]),
+    cite: paths("/cash", PNL),
+    truth: [
+      { service: "getFinancialMetrics", metric: "runway_months", ...OCT },
+    ],
+  },
+  {
+    id: "metric-gross-margin",
+    kind: "figure",
+    topic: "Metrics",
+    question: "What was our gross margin in October 2026?",
+    // No cost of materials and services: (₹2,00,000.00 − ₹0.00) ÷ ₹2,00,000.00.
+    expect: fixed(["100.0%"]),
+    cite: paths(PNL),
+    truth: [
+      { service: "getFinancialMetrics", metric: "gross_margin_pct", ...OCT },
+    ],
   },
   // Can't answer
   {
